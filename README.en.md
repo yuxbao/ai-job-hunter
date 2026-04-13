@@ -1,6 +1,12 @@
 # AI Job Hunter
 
-English README. 中文说明请见 [README.md](./README.md).
+[中文](./README.md) | [English](./README.en.md)
+
+[![GitHub Stars](https://img.shields.io/github/stars/yuxbao/ai-job-hunter?style=social)](https://github.com/yuxbao/ai-job-hunter)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![LangGraph](https://img.shields.io/badge/Powered%20by-LangGraph-1C3C3C)](https://github.com/langchain-ai/langgraph)
+[![OpenAI Compatible](https://img.shields.io/badge/LLM-OpenAI%20Compatible-412991?logo=openai&logoColor=white)](https://openai.com/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-Welcome-brightgreen)](https://github.com/yuxbao/ai-job-hunter/pulls)
 
 AI Job Hunter is an agentic workflow for collecting AI Engineer campus and internship roles from multiple recruiting websites.
 

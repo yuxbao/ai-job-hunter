@@ -1,6 +1,12 @@
 # AI Job Hunter
 
-中文优先 README，English support available in [README.en.md](./README.en.md).
+[中文](./README.md) | [English](./README.en.md)
+
+[![GitHub Stars](https://img.shields.io/github/stars/yuxbao/ai-job-hunter?style=social)](https://github.com/yuxbao/ai-job-hunter)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![LangGraph](https://img.shields.io/badge/Powered%20by-LangGraph-1C3C3C)](https://github.com/langchain-ai/langgraph)
+[![OpenAI Compatible](https://img.shields.io/badge/LLM-OpenAI%20Compatible-412991?logo=openai&logoColor=white)](https://openai.com/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-Welcome-brightgreen)](https://github.com/yuxbao/ai-job-hunter/pulls)
 
 一个面向 AI Engineer 校招 / 实习岗位的 Agentic 求职助手。项目基于 LangGraph 构建，能够自动规划搜索词、抓取招聘页面、过滤低质量结果、调用 LLM 做语义筛选与信息补全，并最终输出结构化岗位结果。
 
@@ -167,9 +173,3 @@ ai-job-hunter/
 pytest tests/test_acceptance.py tests/test_searcher.py
 ```
 
-## English Summary
-
-AI Job Hunter is an agentic workflow for collecting AI Engineer campus and internship roles from multiple recruiting sites.  
-It uses LangGraph to orchestrate planning, search, scraping, quality gating, LLM filtering, enrichment, evaluation, and structured reporting.
-
-For English readers, see [README.en.md](./README.en.md).
