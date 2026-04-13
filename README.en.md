@@ -1,0 +1,75 @@
+# AI Job Hunter
+
+English README. 中文说明请见 [README.md](./README.md).
+
+AI Job Hunter is an agentic workflow for collecting AI Engineer campus and internship roles from multiple recruiting websites.
+
+It is built with LangGraph and combines:
+
+- query planning
+- multi-source search
+- scraping
+- quality gating
+- LLM-based semantic filtering
+- metadata enrichment
+- acceptance evaluation
+- structured reporting
+
+## Workflow
+
+```text
+START
+  → Planner
+  → Searcher
+  → Scraper
+  → QualityGate
+  → Filter
+  → Enricher
+  → Evaluator
+  → Reporter
+END
+```
+
+## Why It Exists
+
+Raw search results are noisy, and LLM calls are expensive.
+
+So the pipeline is intentionally split into:
+
+1. Low-cost stages
+   search, scraping, rule-based cleanup, quality gating
+2. High-cost stages
+   LLM filtering, enrichment, and final acceptance evaluation
+
+This keeps the expensive reasoning focused on the best candidates instead of the entire noisy pool.
+
+## Quick Start
+
+```bash
+pip install -e .
+cp .env.example .env
+python main.py
+```
+
+To run real search mode:
+
+```bash
+MOCK_MODE=false python main.py
+```
+
+## Outputs
+
+Runtime artifacts are written to `output/`:
+
+- `jobs_latest.json`
+- `jobs_latest.csv`
+- `summary_latest.json`
+- `llm_traces.jsonl`
+
+These files are ignored by git by default.
+
+## Tests
+
+```bash
+pytest tests/test_acceptance.py tests/test_searcher.py
+```

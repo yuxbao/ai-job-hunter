@@ -1,19 +1,19 @@
 # AI Job Hunter
 
-An agentic job-search workflow for collecting AI Engineer campus / internship roles from multiple recruiting websites.
+中文优先 README，English support available in [README.en.md](./README.en.md).
 
-Built with LangGraph, this project plans queries, retrieves search results, gates low-quality pages, filters with an LLM, enriches structured fields, evaluates acceptance criteria, and exports deliverables in JSON / CSV.
+一个面向 AI Engineer 校招 / 实习岗位的 Agentic 求职助手。项目基于 LangGraph 构建，能够自动规划搜索词、抓取招聘页面、过滤低质量结果、调用 LLM 做语义筛选与信息补全，并最终输出结构化岗位结果。
 
-## What It Does
+## 项目亮点
 
-- Searches AI Engineer, LLM, NLP, CV, ML, and related campus roles.
-- Uses multiple job sites such as Boss Zhipin, Liepin, and Zhaopin.
-- Applies a quality gate before expensive LLM steps.
-- Filters and enriches candidate jobs with structured metadata.
-- Tracks acceptance status against a target count and source coverage.
-- Writes human-readable reports plus machine-readable output files.
+- 面向真实求职场景，而不是单纯的网页爬虫
+- 多数据源检索：Boss 直聘、猎聘、智联招聘
+- 质量门控前置：先淘汰聚合页、脏页，再进入 LLM 流程
+- 受控并发：搜索、筛选、补全都支持并发上限
+- 验收驱动：围绕“目标岗位数 + 来源覆盖 + 核心字段完整度”决策
+- 本地输出清晰：JSON、CSV、summary、LLM traces 分开保存
 
-## Workflow
+## 工作流
 
 ```text
 START
@@ -28,104 +28,112 @@ START
 END
 ```
 
-If acceptance is not met, the graph loops back to `Planner` with remembered query history so it avoids reusing the same search terms blindly.
+如果当前结果还没有满足验收标准，流程会回到 `Planner` 继续迭代，但会记住已经尝试过的 query，避免无意义重复检索。
 
-## Why This Design
+## 设计思路
 
-The project is optimized around a practical problem: search results are noisy, and LLM calls are expensive.
+这个项目的核心不是“尽可能多地搜到页面”，而是“尽可能稳定地拿到 50 条可交付岗位”。
 
-So the pipeline deliberately separates:
+因此链路设计上做了两层拆分：
 
-- Broad recall: search and scraping
-- Cheap cleanup: rule-based gating and dedupe
-- Expensive reasoning: LLM filtering and enrichment
-- Final quality control: acceptance evaluation and reporting
+1. 低成本阶段
+   搜索、抓取、规则清洗、质量门控
+2. 高成本阶段
+   LLM 筛选、字段补全、最终验收
 
-This keeps the expensive parts focused on the best candidates instead of the full noisy result set.
+这样可以把昂贵的 LLM 调用留给更高质量的候选，而不是把几百条脏结果全部送进去慢慢处理。
 
-## Key Features
+## 主要能力
 
-- `Planner`: generates or falls back to search queries and tracks attempted queries
-- `Searcher`: performs bounded-concurrency retrieval across data sources
-- `QualityGate`: removes obvious aggregate pages and keeps higher-quality detail pages
-- `Filter`: runs rule-based filtering plus bounded-concurrency LLM batch screening
-- `Enricher`: enriches only a short list near the final target, not the full candidate pool
-- `Evaluator`: checks target count, real source coverage, and required fields
-- `Reporter`: exports results and writes acceptance summaries
+- `Planner`
+  根据目标数量、已有结果、失败来源生成搜索策略，并记录已尝试 query。
+- `Searcher`
+  多站点并发搜索，并合并多轮结果。
+- `Scraper`
+  对缺少详情的结果做网页抓取补充。
+- `QualityGate`
+  前置拦截聚合页、索引页、字段太差的页面。
+- `Filter`
+  规则过滤 + LLM 批量语义筛选。
+- `Enricher`
+  仅对接近最终目标的短名单做字段补全与技术栈抽取。
+- `Evaluator`
+  判断是否满足验收标准，决定继续搜索还是输出。
+- `Reporter`
+  生成 JSON / CSV / summary，并给出控制台报告。
 
-## Tech Stack
+## 快速开始
 
-- Python 3.11+
-- LangGraph
-- LangChain / langchain-openai
-- httpx
-- pydantic / pydantic-settings
-- BeautifulSoup4
-- pandas
-- rich
-- pytest / pytest-asyncio
-
-## Quick Start
-
-### 1. Install
+### 1. 安装依赖
 
 ```bash
 pip install -e .
 ```
 
-### 2. Configure
+### 2. 配置环境变量
 
 ```bash
 cp .env.example .env
 ```
 
-Fill in your keys in `.env`.
+然后按需填写：
 
-### 3. Run
+- `LLM_API_KEY`
+- `LLM_MODEL`
+- `LLM_BASE_URL`
+- `TAVILY_API_KEY`
 
-Mock mode:
+### 3. 运行
+
+Mock 模式：
 
 ```bash
 python main.py
 ```
 
-Real search mode:
+真实搜索模式：
 
 ```bash
 MOCK_MODE=false python main.py
 ```
 
-## Environment Variables
+## 配置项
 
-| Variable | Description | Default |
+| 变量 | 说明 | 默认值 |
 |---|---|---|
-| `LLM_API_KEY` | OpenAI-compatible API key | `""` |
-| `LLM_MODEL` | LLM model name | `gpt-4o-mini` |
-| `LLM_BASE_URL` | Optional custom LLM endpoint | `None` |
-| `TAVILY_API_KEY` | Tavily search API key | `""` |
-| `TARGET_JOB_COUNT` | Target number of jobs | `50` |
-| `MAX_ITERATIONS` | Max graph iterations | `5` |
-| `BATCH_SIZE` | Filter batch size | `10` |
-| `SEARCH_CONCURRENCY` | Search concurrency | `4` |
-| `FILTER_CONCURRENCY` | Filter LLM concurrency | `4` |
-| `ENRICH_CANDIDATE_BUFFER` | Extra shortlist buffer above target | `10` |
-| `ENRICH_CONCURRENCY` | Enrichment concurrency | `4` |
-| `SHOW_LLM_OUTPUT` | Print LLM replies in console | `true` |
-| `WRITE_LLM_OUTPUT_FILES` | Write LLM traces to file | `true` |
-| `MOCK_MODE` | Use built-in mock dataset | `false` |
+| `LLM_API_KEY` | OpenAI 兼容接口的 API Key | `""` |
+| `LLM_MODEL` | 模型名 | `gpt-4o-mini` |
+| `LLM_BASE_URL` | 自定义 LLM endpoint | `None` |
+| `TAVILY_API_KEY` | Tavily 搜索 API Key | `""` |
+| `TARGET_JOB_COUNT` | 目标岗位数 | `50` |
+| `MAX_ITERATIONS` | 最大迭代轮数 | `5` |
+| `BATCH_SIZE` | Filter 批大小 | `10` |
+| `SEARCH_CONCURRENCY` | 搜索并发数 | `4` |
+| `FILTER_CONCURRENCY` | Filter 并发数 | `4` |
+| `ENRICH_CANDIDATE_BUFFER` | 补全短名单缓冲量 | `10` |
+| `ENRICH_CONCURRENCY` | 补全并发数 | `4` |
+| `SHOW_LLM_OUTPUT` | 是否在控制台显示 LLM 回复 | `true` |
+| `WRITE_LLM_OUTPUT_FILES` | 是否写出 LLM trace 文件 | `true` |
+| `MOCK_MODE` | 是否启用 mock 数据 | `false` |
 
-## Output
+## 输出文件
 
-Generated files are written to `output/` during local runs:
+运行后会在 `output/` 下生成：
 
 - `jobs_latest.json`
 - `jobs_latest.csv`
 - `summary_latest.json`
 - `llm_traces.jsonl`
 
-These runtime artifacts are ignored by git and are not intended to be committed.
+其中：
 
-## Project Structure
+- `jobs_latest.*` 是最新岗位结果
+- `summary_latest.json` 是本轮验收摘要
+- `llm_traces.jsonl` 是 LLM 原始回复日志
+
+这些文件默认不会提交到 git。
+
+## 项目结构
 
 ```text
 ai-job-hunter/
@@ -153,14 +161,15 @@ ai-job-hunter/
 └── tests/
 ```
 
-## Testing
+## 测试
 
 ```bash
 pytest tests/test_acceptance.py tests/test_searcher.py
 ```
 
-## Notes
+## English Summary
 
-- This repository does not commit `.env`, generated outputs, or local trace files.
-- Real-world search quality depends on external APIs and the freshness of public recruiting pages.
-- Mock mode is useful for local development and tests when external keys are unavailable.
+AI Job Hunter is an agentic workflow for collecting AI Engineer campus and internship roles from multiple recruiting sites.  
+It uses LangGraph to orchestrate planning, search, scraping, quality gating, LLM filtering, enrichment, evaluation, and structured reporting.
+
+For English readers, see [README.en.md](./README.en.md).
