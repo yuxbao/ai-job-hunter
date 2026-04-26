@@ -15,6 +15,10 @@ Users can start with only a `job_title`, then trigger a full workflow:
 - acceptance evaluation
 - structured reporting
 
+## Preview
+
+![Job Hunter frontend workbench](./docs/assets/job-hunter-workbench.png)
+
 ## Highlights
 
 - Generic role search instead of AI-only positions
