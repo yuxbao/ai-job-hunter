@@ -2,10 +2,12 @@ __pycache__/
 *.pyc
 .env
 .DS_Store
-output/*.json
-output/*.csv
-output/*.jsonl
-output/.DS_Store
+node_modules/
+*.tsbuildinfo
+frontend/vite.config.d.ts
+frontend/vite.config.js
+frontend/package-lock.json
+output/**
 .venv/
 dist/
 *.egg-info/

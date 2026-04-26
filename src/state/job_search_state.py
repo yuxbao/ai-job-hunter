@@ -14,7 +14,13 @@ class SearchPlan(TypedDict):
 class JobSearchState(TypedDict, total=False):
     # 输入
     target_count: int
-    job_type: str
+    job_title: str
+    requirements: str
+    search_type: Literal["campus", "intern", "all"]
+    cities: list[str]
+    exclude_keywords: str
+    search_brief: str
+    output_dir: str
 
     # 规划阶段
     search_plan: SearchPlan | None
@@ -33,6 +39,9 @@ class JobSearchState(TypedDict, total=False):
     # 质量控制
     failed_sources: list[str]
     error_log: list[str]
+    search_warnings: list[str]
+    degraded_mode: bool
+    fallback_used: bool
     coverage_score: float
     acceptance_passed: bool
     acceptance_issues: list[str]
@@ -52,6 +61,7 @@ class JobSearchState(TypedDict, total=False):
         "enriching",
         "evaluating",
         "reporting",
+        "degraded",
         "completed",
         "failed",
     ]

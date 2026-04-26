@@ -16,18 +16,19 @@ from src.graph.nodes.enricher import _enrich_candidates, _shortlist_candidates
 from src.graph.nodes.filter import _rule_based_filter
 from src.graph.nodes.quality_gate import run as gate_run
 from src.graph.nodes.reporter import run as report
+from src.models.search_request import SearchRequest
 from src.models.job import JobPosting
 from src.tools.data_adapter import DataAdapter
 
 
 def make_job(index: int, source: str, confidence: float = 0.9) -> JobPosting:
     return JobPosting(
-        title=f"AI Engineer {index}",
+        title=f"后端开发工程师 {index}",
         company=f"Company {index}",
         location="Shanghai",
         salary="20k-30k",
-        tech_tags=["LLM"],
-        requirements="Python, LLM, Agent",
+        tech_tags=["Java", "Spring Boot"],
+        requirements="Java, Spring Boot, SQL",
         source=source,
         job_url=f"https://example.com/{source}/{index}",
         confidence=confidence,
@@ -164,7 +165,13 @@ def test_filter_excludes_low_quality_aggregate_pages():
         },
     ]
 
-    filtered = _rule_based_filter(items)
+    filtered = _rule_based_filter(
+        items,
+        job_title="算法工程师",
+        requirements="大模型",
+        search_type="all",
+        exclude_keywords="",
+    )
 
     assert len(filtered) == 1
     assert "贝壳找房" in filtered[0]["title"]
@@ -229,7 +236,7 @@ import asyncio
 async def test_enricher_processes_shortlist_with_controlled_concurrency(tmp_path: Path):
     jobs = [
         JobPosting(
-            title=f"AI Engineer {i}",
+            title=f"后端开发工程师 {i}",
             company=f"Company {i}",
             location="",
             salary="",
@@ -247,6 +254,7 @@ async def test_enricher_processes_shortlist_with_controlled_concurrency(tmp_path
         jobs,
         llm=FakeLLM(delay=0.1),
         output_dir=str(tmp_path),
+        search_brief="岗位名称：后端开发工程师；求职类型：校招/实习",
         max_concurrency=4,
     )
     elapsed = time.perf_counter() - started
@@ -277,13 +285,13 @@ class FakeFilterLLM:
 async def test_filter_batches_run_with_controlled_concurrency(tmp_path: Path):
     items = [
         {
-            "title": f"AI Engineer {i}",
+            "title": f"后端开发工程师 {i}",
             "company": f"Company {i}",
             "location": "Shanghai",
             "salary": "20k-30k",
             "source": "boss_zhipin",
             "job_url": f"https://example.com/{i}",
-            "description": "LLM Agent",
+            "description": "Java Spring Boot SQL",
         }
         for i in range(8)
     ]
@@ -295,9 +303,25 @@ async def test_filter_batches_run_with_controlled_concurrency(tmp_path: Path):
         batch_size=2,
         total_batches=4,
         output_dir=str(tmp_path),
+        search_brief="岗位名称：后端开发工程师；岗位要求：Java Spring Boot SQL",
         max_concurrency=2,
     )
     elapsed = time.perf_counter() - started
 
     assert len(candidates) == 8
     assert elapsed < 0.35
+
+
+def test_search_request_builds_search_brief_and_terms():
+    request = SearchRequest(
+        job_title="后端开发实习生",
+        requirements="Java Spring Boot",
+        search_type="intern",
+        cities=["上海"],
+        exclude_keywords="销售",
+    )
+
+    assert "岗位名称：后端开发实习生" in request.search_brief
+    assert "目标城市：上海" in request.search_brief
+    assert "Java Spring Boot" in request.search_brief
+    assert "后端开发实习生" in request.target_terms

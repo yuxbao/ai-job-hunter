@@ -10,6 +10,7 @@ from langchain_core.messages import HumanMessage
 from src.models.job import JobPosting
 from src.prompts.planner_prompt import ENRICH_PROMPT
 from src.utils.logger import logger, print_llm_output, write_llm_output
+from src.utils.progress import ProgressCallback, emit_progress
 
 
 def _job_key(job: JobPosting) -> tuple[str, str, str]:
@@ -59,7 +60,9 @@ async def _enrich_candidates(
     shortlisted: list[JobPosting],
     llm: BaseChatModel | None,
     output_dir: str,
+    search_brief: str,
     max_concurrency: int,
+    progress_callback: ProgressCallback | None = None,
 ) -> list[JobPosting]:
     total = len(shortlisted)
     semaphore = asyncio.Semaphore(max(1, max_concurrency))
@@ -74,13 +77,29 @@ async def _enrich_candidates(
 
         try:
             async with semaphore:
-                enriched_job = await _enrich_single(job, llm, output_dir, index, total)
+                enriched_job = await _enrich_single(
+                    job,
+                    llm,
+                    output_dir,
+                    index,
+                    total,
+                    search_brief,
+                )
         except Exception as exc:
             logger.debug(f"[Enricher] 补全失败 {index}/{total}: {exc}")
             logger.info(f"[Enricher] 完成 {index}/{total}: {title} (补全失败，保留原始数据)")
             return job
 
         logger.info(f"[Enricher] 完成 {index}/{total}: {title}")
+        await emit_progress(
+            progress_callback,
+            {
+                "event": "stage_progress",
+                "stage": "enricher",
+                "message": f"完成补全 {index}/{total}：{title}",
+                "stage_progress": index / max(total, 1),
+            },
+        )
         return enriched_job
 
     tasks = [
@@ -90,7 +109,11 @@ async def _enrich_candidates(
     return await asyncio.gather(*tasks)
 
 
-async def run(state: dict, llm: BaseChatModel | None = None) -> dict:
+async def run(
+    state: dict,
+    llm: BaseChatModel | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> dict:
     """补全节点: 使用 LLM 补全缺失字段并识别技术栈"""
     candidates: list[JobPosting] = state.get("candidate_jobs", [])
 
@@ -120,7 +143,9 @@ async def run(state: dict, llm: BaseChatModel | None = None) -> dict:
         shortlisted,
         llm=llm,
         output_dir=output_dir,
+        search_brief=state.get("search_brief", state.get("job_title", "")),
         max_concurrency=settings.ENRICH_CONCURRENCY,
+        progress_callback=progress_callback,
     )
 
     # 计算技术标签统计
@@ -144,6 +169,7 @@ async def _enrich_single(
     output_dir: str,
     index: int,
     total: int,
+    search_brief: str,
 ) -> JobPosting:
     """使用 LLM 补全单个岗位"""
     job_data = {
@@ -152,7 +178,10 @@ async def _enrich_single(
         "description": job.description,
     }
 
-    prompt = ENRICH_PROMPT.format(job_json=json.dumps(job_data, ensure_ascii=False))
+    prompt = ENRICH_PROMPT.format(
+        search_brief=search_brief,
+        job_json=json.dumps(job_data, ensure_ascii=False),
+    )
 
     response = await llm.ainvoke([HumanMessage(content=prompt)])
     if settings.WRITE_LLM_OUTPUT_FILES:

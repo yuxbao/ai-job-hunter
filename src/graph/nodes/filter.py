@@ -10,11 +10,16 @@ from langchain_core.messages import HumanMessage
 
 from src.models.job import JobPosting
 from src.prompts.planner_prompt import FILTER_PROMPT
-from src.tools.data_adapter import DataAdapter
+from src.utils.search_profile import split_search_terms
 from src.utils.logger import logger, print_llm_output, write_llm_output
+from src.utils.progress import ProgressCallback, emit_progress
 
 
-async def run(state: dict, llm: BaseChatModel | None = None) -> dict:
+async def run(
+    state: dict,
+    llm: BaseChatModel | None = None,
+    progress_callback: ProgressCallback | None = None,
+) -> dict:
     """筛选节点: 使用 LLM 进行语义筛选，LLM 不可用时纯规则筛选"""
     scraped_pages = state.get("gated_results", [])
 
@@ -38,7 +43,13 @@ async def run(state: dict, llm: BaseChatModel | None = None) -> dict:
     logger.info(f"[Filter] 去重后 {len(unique)} 条")
 
     # 基于规则的预筛选
-    pre_filtered = _rule_based_filter(unique)
+    pre_filtered = _rule_based_filter(
+        unique,
+        job_title=state.get("job_title", ""),
+        requirements=state.get("requirements", ""),
+        search_type=state.get("search_type", "all"),
+        exclude_keywords=state.get("exclude_keywords", ""),
+    )
     logger.info(f"[Filter] 规则预筛选后 {len(pre_filtered)} 条")
 
     # LLM 语义筛选（分批处理）
@@ -49,7 +60,8 @@ async def run(state: dict, llm: BaseChatModel | None = None) -> dict:
     if llm is None:
         # 无 LLM 时，规则筛选结果直接转为 JobPosting
         logger.info("[Filter] LLM 不可用，使用纯规则筛选")
-        for item in pre_filtered:
+        total_items = len(pre_filtered) or 1
+        for index, item in enumerate(pre_filtered, 1):
             job = JobPosting(
                 title=item.get("title", ""),
                 company=item.get("company", ""),
@@ -62,6 +74,16 @@ async def run(state: dict, llm: BaseChatModel | None = None) -> dict:
                 confidence=0.8,
             )
             candidates.append(job)
+            await emit_progress(
+                progress_callback,
+                {
+                    "event": "stage_progress",
+                    "stage": "filter",
+                    "message": f"规则保留：{job.title}",
+                    "stage_progress": index / total_items,
+                    "counts": {"candidate_jobs": len(candidates)},
+                },
+            )
     else:
         batch_size = state.get("batch_size", 10)
         total_batches = (len(pre_filtered) + batch_size - 1) // batch_size
@@ -72,8 +94,27 @@ async def run(state: dict, llm: BaseChatModel | None = None) -> dict:
             batch_size=batch_size,
             total_batches=total_batches,
             output_dir=output_dir,
+            search_brief=state.get("search_brief", state.get("job_title", "")),
             max_concurrency=settings.FILTER_CONCURRENCY,
+            progress_callback=progress_callback,
         )
+        if pre_filtered and not candidates:
+            logger.warning("[Filter] LLM 筛选无结果，回退到规则筛选结果")
+            candidates = [
+                JobPosting(
+                    title=item.get("title", ""),
+                    company=item.get("company", ""),
+                    location=item.get("location", ""),
+                    salary=item.get("salary", ""),
+                    tech_tags=item.get("tech_tags", []),
+                    requirements=item.get("requirements", ""),
+                    source=item.get("source", ""),
+                    job_url=item.get("job_url", ""),
+                    description=item.get("description", ""),
+                    confidence=0.65,
+                )
+                for item in pre_filtered
+            ]
 
     logger.info(f"[Filter] 筛选后 {len(candidates)} 条候选岗位")
 
@@ -86,7 +127,9 @@ async def _filter_batches(
     batch_size: int,
     total_batches: int,
     output_dir: str,
+    search_brief: str,
     max_concurrency: int,
+    progress_callback: ProgressCallback | None = None,
 ) -> list[JobPosting]:
     semaphore = asyncio.Semaphore(max(1, max_concurrency))
 
@@ -99,8 +142,18 @@ async def _filter_batches(
                 batch_number,
                 total_batches,
                 output_dir,
+                search_brief,
             )
         logger.info(f"[Filter] 完成 LLM 批次 {batch_number}/{total_batches}")
+        await emit_progress(
+            progress_callback,
+            {
+                "event": "stage_progress",
+                "stage": "filter",
+                "message": f"完成筛选批次 {batch_number}/{total_batches}",
+                "stage_progress": batch_number / max(total_batches, 1),
+            },
+        )
         return batch_number, candidates
 
     tasks = [
@@ -118,25 +171,24 @@ async def _filter_batches(
     return candidates
 
 
-def _rule_based_filter(items: list[dict]) -> list[dict]:
-    """基于简单规则的预筛选"""
-    ai_keywords = [
-        "ai", "人工智能", "机器学习", "深度学习", "算法",
-        "llm", "大模型", "nlp", "cv", "计算机视觉",
-        "推荐", "搜索", "数据", "模型", "pytorch", "tensorflow",
-        "神经网络", "transformer", "多模态", "语音",
-        "agent", "rag", "aigc", "强化学习",
-    ]
-    exclude_keywords = [
-        "前端", "测试", "运维", "销售", "行政", "hr", "人事",
-        "3年以上", "5年", "社招", "高级",
-    ]
-
+def _rule_based_filter(
+    items: list[dict],
+    job_title: str,
+    requirements: str,
+    search_type: str,
+    exclude_keywords: str,
+) -> list[dict]:
+    """基于岗位画像的预筛选。"""
+    target_terms = split_search_terms(job_title, requirements)
+    user_exclusion_terms = split_search_terms(exclude_keywords, limit=8)
+    senior_terms = ["3年以上", "5年", "社招", "高级", "资深", "专家", "经理岗"]
+    campus_terms = ["校招", "校园招聘", "应届", "应届生", "2026届", "2027届"]
+    intern_terms = ["实习", "实习生", "日常实习"]
     filtered = []
     for item in items:
         title = item.get("title", "").lower()
         desc = item.get("description", "").lower()
-        text = f"{title} {desc}"
+        text = f"{title} {desc} {item.get('requirements', '').lower()}"
         job_url = item.get("job_url", "")
         parsed_url = urlparse(job_url)
         low_quality_liepin_page = (
@@ -145,9 +197,7 @@ def _rule_based_filter(items: list[dict]) -> list[dict]:
             and "/job/" not in parsed_url.path
         )
 
-        # 排除明显不符合的
-        has_exclude = any(kw in text for kw in exclude_keywords)
-        if has_exclude:
+        if any(term.lower() in text for term in senior_terms):
             continue
 
         # 排除明显的聚合页/索引页，避免把“招聘网”当成具体岗位
@@ -160,11 +210,24 @@ def _rule_based_filter(items: list[dict]) -> list[dict]:
         if low_quality_page:
             continue
 
-        # 包含 AI 相关关键词
-        has_ai = any(kw in text for kw in ai_keywords)
-        if has_ai:
-            filtered.append(item)
-        elif title:  # title 不为空但没匹配到，也保留（可能 LLM 能判断）
+        if user_exclusion_terms and any(term.lower() in text for term in user_exclusion_terms):
+            continue
+
+        if search_type == "campus":
+            if any(term in text for term in intern_terms) and not any(
+                term in text for term in campus_terms
+            ):
+                continue
+        elif search_type == "intern":
+            if any(term in text for term in campus_terms) and not any(
+                term in text for term in intern_terms
+            ):
+                continue
+
+        if target_terms and not any(term.lower() in text for term in target_terms):
+            continue
+
+        if title:
             filtered.append(item)
 
     return filtered
@@ -176,6 +239,7 @@ async def _llm_filter_batch(
     batch_number: int,
     total_batches: int,
     output_dir: str,
+    search_brief: str,
 ) -> list[JobPosting]:
     """使用 LLM 对一批岗位进行语义筛选"""
     # 简化输入，减少 token
@@ -188,7 +252,10 @@ async def _llm_filter_batch(
             "description": item.get("description", "")[:300],
         })
 
-    prompt = FILTER_PROMPT.format(jobs_json=json.dumps(simplified, ensure_ascii=False))
+    prompt = FILTER_PROMPT.format(
+        search_brief=search_brief,
+        jobs_json=json.dumps(simplified, ensure_ascii=False),
+    )
 
     try:
         response = await llm.ainvoke([HumanMessage(content=prompt)])

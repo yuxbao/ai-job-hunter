@@ -2,20 +2,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from langgraph.graph import StateGraph, END
 
 from config.settings import settings
 from src.graph.nodes import enricher, evaluator, filter, planner, quality_gate, reporter, scraper, searcher
+from src.models.job import JobPosting
 from src.sources.boss_zhipin import BossZhipinSource
 from src.sources.liepin import LiepinSource
 from src.sources.mock_source import MockSource
+from src.sources.search_site import SiteSearchSource
 from src.sources.zhaopin import ZhaopinSource
 from src.state.job_search_state import JobSearchState
 from src.tools.search_engine import SearchEngineTool
 from src.tools.web_scraper import WebScraperTool
 from src.utils.logger import logger
+from src.utils.progress import ProgressCallback, emit_progress
 
 
 @dataclass
@@ -29,7 +32,93 @@ class GraphRuntime:
         await self.web_scraper_tool.aclose()
 
 
-def build_graph() -> GraphRuntime:
+STAGE_ORDER = [
+    "planner",
+    "searcher",
+    "scraper",
+    "quality_gate",
+    "filter",
+    "enricher",
+    "evaluator",
+    "reporter",
+]
+
+def _state_counts(state: dict[str, Any]) -> dict[str, int]:
+    return {
+        "raw_results": len(state.get("raw_results", [])),
+        "scraped_pages": len(state.get("scraped_pages", [])),
+        "gated_results": len(state.get("gated_results", [])),
+        "candidate_jobs": len(state.get("candidate_jobs", [])),
+        "final_jobs": len(state.get("final_jobs", [])),
+    }
+
+
+def _serialize_jobs(jobs: list[JobPosting]) -> list[dict[str, Any]]:
+    return [job.model_dump() for job in jobs]
+
+
+def _wrap_node(
+    name: str,
+    node_func: Callable[..., Awaitable[dict[str, Any]]],
+    progress_callback: ProgressCallback | None,
+) -> Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]:
+    stage_index = STAGE_ORDER.index(name)
+
+    async def wrapped(state: dict[str, Any]) -> dict[str, Any]:
+        await emit_progress(
+            progress_callback,
+            {
+                "event": "stage_started",
+                "stage": name,
+                "stage_index": stage_index,
+                "total_stages": len(STAGE_ORDER),
+                "iteration": state.get("iteration", 0),
+                "status": "running",
+                "counts": _state_counts(state),
+            },
+        )
+        try:
+            result = await node_func(state)
+        except Exception as exc:
+            await emit_progress(
+                progress_callback,
+                {
+                    "event": "stage_failed",
+                    "stage": name,
+                    "stage_index": stage_index,
+                    "total_stages": len(STAGE_ORDER),
+                    "iteration": state.get("iteration", 0),
+                    "status": "failed",
+                    "message": str(exc),
+                    "counts": _state_counts(state),
+                },
+            )
+            raise
+
+        merged_state = {**state, **result}
+        payload = {
+            "event": "stage_completed",
+            "stage": name,
+            "stage_index": stage_index,
+            "total_stages": len(STAGE_ORDER),
+            "iteration": merged_state.get("iteration", 0),
+            "status": "running",
+            "counts": _state_counts(merged_state),
+        }
+
+        if name == "reporter":
+            payload["status"] = merged_state.get("status", "completed")
+            payload["final_jobs"] = _serialize_jobs(merged_state.get("final_jobs", []))
+            payload["summary"] = merged_state.get("acceptance_summary", {})
+            payload["output_path"] = merged_state.get("output_path", "")
+
+        await emit_progress(progress_callback, payload)
+        return result
+
+    return wrapped
+
+
+def build_graph(progress_callback: ProgressCallback | None = None) -> GraphRuntime:
     """构建 LangGraph 状态机"""
 
     # 初始化 LLM（仅在 API Key 有效时）
@@ -63,6 +152,8 @@ def build_graph() -> GraphRuntime:
         sources["boss_zhipin"] = BossZhipinSource(search_tool)
         sources["liepin"] = LiepinSource(search_tool)
         sources["zhaopin"] = ZhaopinSource(search_tool)
+        sources["nowcoder"] = SiteSearchSource("nowcoder", "nowcoder.com", search_tool, priority=4)
+        sources["51job"] = SiteSearchSource("51job", "51job.com", search_tool, priority=5)
         sources["mock"] = MockSource()  # 作为 fallback
         logger.info(f"[Graph] 真实模式: 数据源 {list(sources.keys())}")
 
@@ -72,23 +163,31 @@ def build_graph() -> GraphRuntime:
         searcher.run,
         sources=sources,
         max_concurrency=settings.SEARCH_CONCURRENCY,
+        progress_callback=progress_callback,
     )
-    scraper_node = partial(scraper.run, scraper=web_scraper_tool)
-    filter_node = partial(filter.run, llm=llm)
-    enricher_node = partial(enricher.run, llm=llm)
+    scraper_node = partial(
+        scraper.run,
+        scraper=web_scraper_tool,
+        progress_callback=progress_callback,
+    )
+    filter_node = partial(filter.run, llm=llm, progress_callback=progress_callback)
+    enricher_node = partial(enricher.run, llm=llm, progress_callback=progress_callback)
 
     # 构建图
     graph = StateGraph(JobSearchState)
 
     # 添加节点
-    graph.add_node("planner", planner_node)
-    graph.add_node("searcher", searcher_node)
-    graph.add_node("scraper", scraper_node)
-    graph.add_node("quality_gate", quality_gate.run)
-    graph.add_node("filter", filter_node)
-    graph.add_node("enricher", enricher_node)
-    graph.add_node("evaluator", evaluator.run)
-    graph.add_node("reporter", reporter.run)
+    graph.add_node("planner", _wrap_node("planner", planner_node, progress_callback))
+    graph.add_node("searcher", _wrap_node("searcher", searcher_node, progress_callback))
+    graph.add_node("scraper", _wrap_node("scraper", scraper_node, progress_callback))
+    graph.add_node(
+        "quality_gate",
+        _wrap_node("quality_gate", quality_gate.run, progress_callback),
+    )
+    graph.add_node("filter", _wrap_node("filter", filter_node, progress_callback))
+    graph.add_node("enricher", _wrap_node("enricher", enricher_node, progress_callback))
+    graph.add_node("evaluator", _wrap_node("evaluator", evaluator.run, progress_callback))
+    graph.add_node("reporter", _wrap_node("reporter", reporter.run, progress_callback))
 
     # 定义边
     graph.set_entry_point("planner")

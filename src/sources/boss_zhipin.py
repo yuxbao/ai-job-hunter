@@ -16,7 +16,7 @@ class BossZhipinSource(BaseSource):
 
     def build_query(self, keywords: list[str]) -> str:
         kw = " ".join(keywords)
-        return f"site:zhipin.com {kw} 校招 2026"
+        return f"site:zhipin.com {kw} 招聘"
 
     async def search(self, query: str, page: int = 1) -> ToolResult:
         result = await self.search_tool.execute(
@@ -25,7 +25,11 @@ class BossZhipinSource(BaseSource):
             include_domains=["zhipin.com"],
         )
         if result.success and not result.data:
-            result = await self.search_tool.execute(query=query, max_results=15)
+            result = await self.search_tool.execute(
+                query=query.replace("site:zhipin.com", "").strip(),
+                max_results=15,
+                include_domains=["zhipin.com"],
+            )
         if not result.success:
             return result
 

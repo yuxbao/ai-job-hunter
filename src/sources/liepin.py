@@ -16,7 +16,7 @@ class LiepinSource(BaseSource):
 
     def build_query(self, keywords: list[str]) -> str:
         kw = " ".join(keywords)
-        return f"site:liepin.com {kw} 校招 2026届"
+        return f"site:liepin.com {kw} 招聘"
 
     async def search(self, query: str, page: int = 1) -> ToolResult:
         result = await self.search_tool.execute(
@@ -25,7 +25,11 @@ class LiepinSource(BaseSource):
             include_domains=["liepin.com"],
         )
         if result.success and not result.data:
-            result = await self.search_tool.execute(query=query, max_results=15)
+            result = await self.search_tool.execute(
+                query=query.replace("site:liepin.com", "").strip(),
+                max_results=15,
+                include_domains=["liepin.com"],
+            )
         if not result.success:
             return result
 

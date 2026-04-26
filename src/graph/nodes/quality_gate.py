@@ -27,6 +27,8 @@ def _is_detail_page(url: str) -> bool:
         return True
     if "nowcoder.com" in host and ("/jobs/detail/" in path or "/feed/main/detail/" in path):
         return True
+    if "51job.com" in host and ("job" in path or "jobs" in path):
+        return True
     return False
 
 
@@ -41,6 +43,8 @@ def _is_low_quality_page(item: dict) -> bool:
     if "招聘网" in title or "汇聚众多行业名企" in desc or "公司名" in desc:
         return True
     if "liepin.com" in host and path.startswith("/zp") and "/job/" not in path:
+        return True
+    if "nowcoder.com" in host and "/jobs/detail/" not in path:
         return True
     return False
 
@@ -86,7 +90,9 @@ async def run(state: dict) -> dict:
     normalized = []
     for raw in scraped_pages:
         source = raw.get("source", "unknown")
-        if raw.get("job_url") and raw.get("title"):
+        if source == "mock":
+            normalized.append(DataAdapter.adapt(raw, "mock"))
+        elif raw.get("job_url") and raw.get("title"):
             normalized.append(DataAdapter.adapt(raw, "generic"))
         else:
             normalized.append(DataAdapter.adapt(raw, source))

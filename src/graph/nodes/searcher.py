@@ -5,6 +5,7 @@ import asyncio
 from src.sources.base_source import BaseSource
 from src.tools.base import ToolResult
 from src.utils.logger import logger
+from src.utils.progress import ProgressCallback, emit_progress
 
 
 async def _search_one(
@@ -20,6 +21,22 @@ async def _search_one(
             return site_name, query, result, None
     except Exception as exc:
         return site_name, query, None, exc
+
+
+async def _run_mock_fallback(
+    queries: list[str],
+    source: BaseSource,
+    semaphore: asyncio.Semaphore,
+) -> list[dict]:
+    fallback_results: list[dict] = []
+    for query in queries:
+        _, _, result, error = await _search_one(query, "mock", source, semaphore)
+        if error is not None:
+            logger.warning(f"[Searcher] mock fallback 异常: {error}")
+            continue
+        if result and result.success and result.data:
+            fallback_results = _merge_results(fallback_results, result.data)
+    return fallback_results
 
 
 def _result_key(item: dict) -> tuple[str, str, str]:
@@ -63,6 +80,7 @@ async def run(
     state: dict,
     sources: dict[str, BaseSource],
     max_concurrency: int = 4,
+    progress_callback: ProgressCallback | None = None,
 ) -> dict:
     """搜索节点: 根据计划执行搜索"""
     plan = state.get("search_plan")
@@ -75,6 +93,7 @@ async def run(
     existing_results = list(state.get("scraped_pages") or state.get("raw_results", []))
     all_results = list(existing_results)
     failed = list(state.get("failed_sources", []))
+    search_warnings = list(state.get("search_warnings", []))
     sources_used = list(state.get("sources_used", []))
     attempted_queries = list(state.get("attempted_queries", []))
     unique_queries = list(dict.fromkeys(plan.get("queries", [])))
@@ -96,11 +115,25 @@ async def run(
 
     results = await asyncio.gather(*tasks) if tasks else []
 
+    total_tasks = len(results) or 1
+    completed_tasks = 0
+
     for site_name, query, result, error in results:
+        completed_tasks += 1
         if error is not None:
             logger.error(f"[Searcher] {site_name} 异常: {error}")
             if site_name not in failed:
                 failed.append(site_name)
+            await emit_progress(
+                progress_callback,
+                {
+                    "event": "stage_progress",
+                    "stage": "searcher",
+                    "message": f"{site_name} 搜索失败：{query}",
+                    "stage_progress": completed_tasks / total_tasks,
+                    "counts": {"raw_results": len(all_results)},
+                },
+            )
             continue
 
         if result and result.success and result.data:
@@ -111,18 +144,67 @@ async def run(
                 f"[Searcher] {site_name} 搜索 '{query}' "
                 f"获取 {len(result.data)} 条结果"
             )
+            await emit_progress(
+                progress_callback,
+                {
+                    "event": "stage_progress",
+                    "stage": "searcher",
+                    "message": f"{site_name} 完成：{query}（{len(result.data)} 条）",
+                    "stage_progress": completed_tasks / total_tasks,
+                    "counts": {"raw_results": len(all_results)},
+                },
+            )
             continue
 
         logger.warning(
             f"[Searcher] {site_name} 搜索 '{query}' 失败: "
             f"{result.error if result else '未知错误'}"
         )
+        await emit_progress(
+            progress_callback,
+            {
+                "event": "stage_progress",
+                "stage": "searcher",
+                "message": f"{site_name} 无结果：{query}",
+                "stage_progress": completed_tasks / total_tasks,
+                "counts": {"raw_results": len(all_results)},
+            },
+        )
+
+    fallback_used = bool(state.get("fallback_used", False))
+    degraded_mode = bool(state.get("degraded_mode", False))
+    no_new_results = len(all_results) == len(existing_results)
+    if no_new_results and "mock" in sources and "mock" not in target_sites:
+        fallback_results = await _run_mock_fallback(unique_queries, sources["mock"], semaphore)
+        if fallback_results:
+            all_results = _merge_results(all_results, fallback_results)
+            fallback_used = True
+            degraded_mode = True
+            if "mock" not in sources_used:
+                sources_used.append("mock")
+            warning = "真实招聘搜索不可用或无结果，已降级使用内置示例数据。配置有效且有额度的 TAVILY_API_KEY 后可获取真实招聘网站结果。"
+            if warning not in search_warnings:
+                search_warnings.append(warning)
+            await emit_progress(
+                progress_callback,
+                {
+                    "event": "stage_progress",
+                    "stage": "searcher",
+                    "message": f"启用降级示例源（{len(fallback_results)} 条）",
+                    "stage_progress": 1.0,
+                    "counts": {"raw_results": len(all_results)},
+                    "summary": {"degraded_mode": True, "search_warnings": search_warnings},
+                },
+            )
 
     logger.info(f"[Searcher] 搜索完成, 共获取 {len(all_results)} 条原始结果")
 
     return {
         "raw_results": all_results,
         "failed_sources": failed,
+        "search_warnings": search_warnings,
+        "degraded_mode": degraded_mode,
+        "fallback_used": fallback_used,
         "sources_used": sources_used,
         "attempted_queries": list(dict.fromkeys(attempted_queries + unique_queries)),
         "status": "searching",

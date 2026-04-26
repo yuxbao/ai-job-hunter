@@ -1,81 +1,59 @@
-# AI Job Hunter
+# Job Hunter
 
 [中文](./README.md) | [English](./README.en.md)
 
-[![GitHub Stars](https://img.shields.io/github/stars/yuxbao/ai-job-hunter?style=social)](https://github.com/yuxbao/ai-job-hunter)
-[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
-[![LangGraph](https://img.shields.io/badge/Powered%20by-LangGraph-1C3C3C)](https://github.com/langchain-ai/langgraph)
-[![OpenAI Compatible](https://img.shields.io/badge/LLM-OpenAI%20Compatible-412991?logo=openai&logoColor=white)](https://openai.com/)
-[![PRs Welcome](https://img.shields.io/badge/PRs-Welcome-brightgreen)](https://github.com/yuxbao/ai-job-hunter/pulls)
+A general campus and internship job assistant built with LangGraph, FastAPI, and React.
 
-AI Job Hunter is an agentic workflow for collecting AI Engineer campus and internship roles from multiple recruiting websites.
-
-It is built with LangGraph and combines:
+Users can start with only a `job_title`, then trigger a full workflow:
 
 - query planning
 - multi-source search
-- scraping
+- detail scraping
 - quality gating
-- LLM-based semantic filtering
+- semantic filtering
 - metadata enrichment
 - acceptance evaluation
 - structured reporting
 
-## Workflow
+## Highlights
 
-```text
-START
-  → Planner
-  → Searcher
-  → Scraper
-  → QualityGate
-  → Filter
-  → Enricher
-  → Evaluator
-  → Reporter
-END
-```
+- Generic role search instead of AI-only positions
+- Optional user preferences: requirements, search type, cities, target count, exclude keywords
+- FastAPI async job APIs with live progress polling
+- React + TypeScript frontend
+- JSON / CSV / summary / LLM trace exports
 
-## Why It Exists
-
-Raw search results are noisy, and LLM calls are expensive.
-
-So the pipeline is intentionally split into:
-
-1. Low-cost stages
-   search, scraping, rule-based cleanup, quality gating
-2. High-cost stages
-   LLM filtering, enrichment, and final acceptance evaluation
-
-This keeps the expensive reasoning focused on the best candidates instead of the entire noisy pool.
-
-## Quick Start
+## Run the backend
 
 ```bash
 pip install -e .
-cp .env.example .env
-python main.py
+uvicorn src.api.app:app --reload
 ```
 
-To run real search mode:
+## Run the frontend
 
 ```bash
-MOCK_MODE=false python main.py
+cd frontend
+npm install
+npm run dev
 ```
 
-## Outputs
-
-Runtime artifacts are written to `output/`:
-
-- `jobs_latest.json`
-- `jobs_latest.csv`
-- `summary_latest.json`
-- `llm_traces.jsonl`
-
-These files are ignored by git by default.
-
-## Tests
+## CLI example
 
 ```bash
-pytest tests/test_acceptance.py tests/test_searcher.py
+python main.py --job-title "Backend Intern" --requirements "Java Spring Boot"
+```
+
+## API example
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/search-jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_title": "Backend Intern",
+    "requirements": "Java Spring Boot",
+    "search_type": "intern",
+    "cities": ["Shanghai"],
+    "target_count": 30
+  }'
 ```

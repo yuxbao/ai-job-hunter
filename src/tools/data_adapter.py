@@ -105,6 +105,8 @@ class DataAdapter:
             "salary": raw.get("salary", "")
             or DataAdapter._extract_salary(title, description),
             "description": description,
+            "requirements": raw.get("requirements", ""),
+            "tech_tags": raw.get("tech_tags", []),
             "source": raw.get("source")
             or DataAdapter._infer_source(raw.get("job_url", raw.get("url", "")))
             or "unknown",

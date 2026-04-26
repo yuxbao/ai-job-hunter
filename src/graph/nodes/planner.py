@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from config.settings import settings
 from langchain_core.language_models import BaseChatModel
@@ -8,6 +9,7 @@ from langchain_core.messages import HumanMessage
 
 from src.prompts.planner_prompt import PLANNER_PROMPT
 from src.state.job_search_state import JobSearchState, SearchPlan
+from src.utils.search_profile import SEARCH_TYPE_LABELS, split_search_terms
 from src.utils.logger import logger, print_llm_output, write_llm_output
 
 
@@ -15,29 +17,55 @@ def _dedupe_keep_order(items: list[str]) -> list[str]:
     return list(dict.fromkeys(items))
 
 
+def _build_default_queries(state: JobSearchState) -> list[str]:
+    job_title = state.get("job_title", "岗位").strip()
+    search_type = state.get("search_type", "all")
+    requirements = state.get("requirements", "")
+    cities = state.get("cities", [])
+    type_terms = {
+        "campus": ["校招", "校园招聘", "应届生", "2026届"],
+        "intern": ["实习", "实习生", "日常实习"],
+        "all": ["校招", "实习", "应届生"],
+    }.get(search_type, ["校招", "实习"])
+    extra_terms = split_search_terms(requirements, limit=4)
+
+    queries = [f"{job_title} {term}" for term in type_terms[:3]]
+    queries.extend(f"{job_title} {term}" for term in extra_terms[:2])
+
+    for city in cities[:2]:
+        queries.append(f"{job_title} {city} {type_terms[0]}")
+        if extra_terms:
+            queries.append(f"{job_title} {city} {extra_terms[0]} {type_terms[0]}")
+
+    if extra_terms:
+        queries.append(
+            f"{job_title} {extra_terms[0]} {SEARCH_TYPE_LABELS.get(search_type, '')}".strip()
+        )
+    queries.append(job_title)
+
+    cleaned = [
+        re.sub(r"\s+", " ", query).strip()
+        for query in queries
+        if query.strip()
+    ]
+    return _dedupe_keep_order(cleaned)[:8]
+
+
 async def run(state: JobSearchState, llm: BaseChatModel | None = None) -> dict:
     """规划节点: 使用 LLM 生成搜索策略，LLM 不可用时使用默认策略"""
     logger.info("[Planner] 正在规划搜索策略...")
 
     default_plan: SearchPlan = {
-        "queries": [
-            "AI算法工程师 校招",
-            "机器学习工程师 2026届",
-            "大模型工程师 校园招聘",
-            "LLM工程师 应届生",
-            "算法工程师 校招 深度学习",
-            "NLP工程师 校招",
-            "计算机视觉 算法 校招",
-        ],
+        "queries": _build_default_queries(state),
         "target_sites": ["mock"],
-        "strategy": "默认策略: 多关键词覆盖主流招聘网站",
+        "strategy": "默认策略: 基于岗位名称、求职类型、城市和补充要求生成组合查询",
     }
 
     # 根据可用数据源调整 target_sites
     if settings.MOCK_MODE:
         default_plan["target_sites"] = ["mock"]
     else:
-        default_plan["target_sites"] = ["boss_zhipin", "liepin", "zhaopin"]
+        default_plan["target_sites"] = ["boss_zhipin", "liepin", "zhaopin", "nowcoder", "51job"]
 
     if llm is None:
         logger.info("[Planner] LLM 不可用，使用默认策略")
@@ -53,8 +81,8 @@ async def run(state: JobSearchState, llm: BaseChatModel | None = None) -> dict:
 
     try:
         prompt = PLANNER_PROMPT.format(
-            job_type=state.get("job_type", "AI Engineer"),
             target_count=state.get("target_count", 50),
+            search_brief=state.get("search_brief", state.get("job_title", "")),
             existing_count=len(state.get("final_jobs", [])),
             sources_used=", ".join(state.get("sources_used", [])),
             failed_sources=", ".join(state.get("failed_sources", [])),

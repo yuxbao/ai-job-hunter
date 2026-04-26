@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from config.settings import settings
 from src.models.job import JobPosting
 from src.state.job_search_state import JobSearchState
 from src.utils.logger import logger
@@ -52,7 +53,12 @@ def _select_final_jobs(unique_jobs: list[JobPosting], target: int) -> list[JobPo
     return selected[:target]
 
 
-def _evaluate_acceptance(final_jobs: list[JobPosting], target: int) -> tuple[bool, list[str], dict]:
+def _evaluate_acceptance(
+    final_jobs: list[JobPosting],
+    target: int,
+    degraded_mode: bool,
+    search_warnings: list[str],
+) -> tuple[bool, list[str], dict]:
     real_sources = sorted({job.source for job in final_jobs if _is_real_source(job.source)})
     missing_core_fields = sum(
         1
@@ -70,9 +76,13 @@ def _evaluate_acceptance(final_jobs: list[JobPosting], target: int) -> tuple[boo
     }
 
     issues: list[str] = []
-    if len(final_jobs) < target:
+    warnings = list(search_warnings)
+    if degraded_mode and final_jobs:
+        warnings.append(f"降级模式返回 {len(final_jobs)} 条示例岗位，未强制满足目标数量 {target}。")
+        issues.append("真实招聘搜索源不可用，当前结果为内置示例数据")
+    elif len(final_jobs) < target:
         issues.append(f"岗位数量不足: {len(final_jobs)}/{target}")
-    if len(real_sources) < REQUIRED_SOURCE_COUNT:
+    if not degraded_mode and not settings.MOCK_MODE and len(real_sources) < REQUIRED_SOURCE_COUNT:
         issues.append(
             f"真实招聘网站数量不足: {len(real_sources)}/{REQUIRED_SOURCE_COUNT}"
         )
@@ -84,10 +94,12 @@ def _evaluate_acceptance(final_jobs: list[JobPosting], target: int) -> tuple[boo
         "target_count": target,
         "real_source_count": len(real_sources),
         "real_sources": real_sources,
+        "degraded_mode": degraded_mode,
+        "warnings": list(dict.fromkeys(warnings)),
         "missing_core_fields": missing_core_fields,
         "optional_field_coverage": optional_field_coverage,
     }
-    return not issues, issues, summary
+    return (not issues and not degraded_mode), issues, summary
 
 
 async def run(state: dict) -> dict:
@@ -96,6 +108,8 @@ async def run(state: dict) -> dict:
     target = state.get("target_count", 50)
     iteration = state.get("iteration", 1)
     max_iter = state.get("max_iterations", 5)
+    degraded_mode = bool(state.get("degraded_mode", False))
+    search_warnings = list(state.get("search_warnings", []))
 
     logger.info(
         f"[Evaluator] 评估第 {iteration} 轮: "
@@ -126,6 +140,8 @@ async def run(state: dict) -> dict:
     acceptance_passed, acceptance_issues, acceptance_summary = _evaluate_acceptance(
         final_jobs,
         target,
+        degraded_mode,
+        search_warnings,
     )
 
     logger.info(
@@ -158,6 +174,13 @@ def route_decision(state: JobSearchState) -> str:
         logger.info(
             f"[Evaluator] 满足条件 ({len(jobs)}/{summary.get('target_count', 50)}, "
             f"来源: {summary.get('real_sources', [])}), 进入汇总阶段"
+        )
+        return "report"
+
+    if state.get("degraded_mode", False) and jobs:
+        logger.info(
+            f"[Evaluator] 已进入降级模式并获得 {len(jobs)} 条示例岗位，"
+            "停止重试并输出降级报告"
         )
         return "report"
 

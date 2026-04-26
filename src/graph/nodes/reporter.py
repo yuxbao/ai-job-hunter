@@ -15,6 +15,8 @@ from src.utils.logger import logger
 async def run(state: dict) -> dict:
     """输出节点: 生成 JSON/CSV 报告和技能画像"""
     jobs: list[JobPosting] = state.get("final_jobs", [])
+    job_title = state.get("job_title", "目标岗位")
+    search_brief = state.get("search_brief", job_title)
     target_count = state.get("target_count", 50)
     candidate_count = len(state.get("candidate_jobs", []))
     tech_stats: dict[str, int] = state.get("tech_tag_stats", {})
@@ -23,6 +25,9 @@ async def run(state: dict) -> dict:
     acceptance_passed = state.get("acceptance_passed", False)
     acceptance_issues = state.get("acceptance_issues", [])
     acceptance_summary = state.get("acceptance_summary", {})
+    search_warnings = state.get("search_warnings", [])
+    degraded_mode = state.get("degraded_mode", False)
+    status = "degraded" if degraded_mode and jobs else "completed" if acceptance_passed else "failed"
 
     logger.info(
         f"[Reporter] 生成报告: 候选池 {candidate_count} 条, "
@@ -54,10 +59,14 @@ async def run(state: dict) -> dict:
     df.to_csv(latest_csv, index=False, encoding="utf-8-sig")
 
     summary = {
-        "status": "completed" if acceptance_passed else "failed",
+        "status": status,
         "acceptance_passed": acceptance_passed,
         "acceptance_issues": acceptance_issues,
         "acceptance_summary": acceptance_summary,
+        "search_warnings": search_warnings,
+        "degraded_mode": degraded_mode,
+        "job_title": job_title,
+        "search_brief": search_brief,
         "target_count": target_count,
         "candidate_count": candidate_count,
         "written_job_count": len(jobs),
@@ -76,6 +85,7 @@ async def run(state: dict) -> dict:
     # 打印报告
     _print_report(
         jobs,
+        job_title,
         target_count,
         candidate_count,
         tech_stats,
@@ -89,7 +99,7 @@ async def run(state: dict) -> dict:
     )
 
     return {
-        "status": "completed" if acceptance_passed else "failed",
+        "status": status,
         "output_path": json_path,
         "summary_path": summary_path,
     }
@@ -97,6 +107,7 @@ async def run(state: dict) -> dict:
 
 def _print_report(
     jobs: list[JobPosting],
+    job_title: str,
     target_count: int,
     candidate_count: int,
     tech_stats: dict[str, int],
@@ -112,7 +123,7 @@ def _print_report(
     console = Console()
 
     # 标题
-    console.print("\n[bold green]===== AI Engineer 校招岗位搜索报告 =====[/bold green]\n")
+    console.print(f"\n[bold green]===== {job_title} 求职搜索报告 =====[/bold green]\n")
 
     # 汇总信息
     console.print(f"[bold]候选池:[/bold] {candidate_count} 条岗位")
@@ -141,7 +152,7 @@ def _print_report(
     table.add_column("公司", style="green", max_width=15)
     table.add_column("地点", max_width=8)
     table.add_column("薪资", style="yellow", max_width=12)
-    table.add_column("技术栈", style="magenta", max_width=30)
+    table.add_column("技能标签", style="magenta", max_width=30)
     table.add_column("来源", style="dim", max_width=10)
 
     for i, job in enumerate(jobs, 1):
@@ -158,16 +169,16 @@ def _print_report(
 
     console.print(table)
 
-    # 技术栈统计
+    # 技能标签统计
     if tech_stats:
-        console.print("\n[bold]===== 技术栈热度 Top 20 =====[/bold]\n")
+        console.print("\n[bold]===== 技能标签热度 Top 20 =====[/bold]\n")
         sorted_tags = sorted(tech_stats.items(), key=lambda x: x[1], reverse=True)[:20]
         for tag, count in sorted_tags:
             bar = "█" * min(count, 30)
             console.print(f"  {tag:20s} {bar} {count}")
 
     # 技能画像
-    console.print("\n[bold]===== AI Engineer 校招技能画像 =====[/bold]\n")
+    console.print("\n[bold]===== 岗位技能画像 =====[/bold]\n")
     profile = _generate_skill_profile(jobs, tech_stats)
     console.print(profile)
 
